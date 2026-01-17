@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Charlie's Insurance Portfolio Mapper</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { margin: 0; font-family: -apple-system, system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+        #ui { padding: 20px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 1000; }
+        #map { flex-grow: 1; }
+        .status-container { margin-top: 10px; }
+        #progressBar { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; display: none; }
+        #progressFill { height: 100%; background: #2c7be5; width: 0%; transition: width 0.3s; }
+        /* Style the popups for readability */
+        .leaflet-popup-content b { color: #2c7be5; }
+        .data-row { border-bottom: 1px solid #eee; padding: 3px 0; display: flex; justify-content: space-between; gap: 10px;}
+        .data-label { font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h3>🏢 Property Portfolio Mapper</h3>
+    <input type="file" id="excelFile" accept=".xlsx, .xls" />
+    <div class="status-container">
+        <div id="statusText">Upload Excel with <b>Address</b> and <b>TIV</b> columns.</div>
+        <div id="progressBar"><div id="progressFill"></div></div>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+    const map = L.map('map').setView([37.8, -96], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const statusText = document.getElementById('statusText');
+    const progressFill = document.getElementById('progressFill');
+    const progressBar = document.getElementById('progressBar');
+
+    document.getElementById('excelFile').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+
+        reader.onload = function(event) {
+            const data = new Uint8Array(event.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+            
+            if (rows.length > 0) {
+                progressBar.style.display = 'block';
+                processAddresses(rows);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    async function processAddresses(rows) {
+        const markers = [];
+        
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const address = row.Address || row.address || row.Location;
+
+            if (address) {
+                progressFill.style.width = ((i + 1) / rows.length) * 100 + '%';
+                statusText.innerText = `Mapping ${i + 1} of ${rows.length}...`;
+                
+                try {
+                    const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
+                    const data = await response.json();
+
+                    if (data && data.length > 0) {
+                        // CREATE POPUP CONTENT DYNAMICALLY
+                        let popupHtml = `<b>Property Details</b><hr>`;
+                        for (let key in row) {
+                            // Format numbers for TIV if it's a number
+                            let value = row[key];
+                            if (typeof value === 'number' && (key.toLowerCase().includes('tiv') || key.toLowerCase().includes('value'))) {
+                                value = '$' + value.toLocaleString();
+                            }
+                            popupHtml += `<div class="data-row"><span class="data-label">${key}:</span> <span>${value}</span></div>`;
+                        }
+
+                        const marker = L.marker([data[0].lat, data[0].lon])
+                            .bindPopup(popupHtml, { minWidth: 200 })
+                            .addTo(map);
+                        markers.push(marker);
+                    }
+                    
+                    await new Promise(r => setTimeout(r, 1000)); // Respect API limits
+                } catch (err) { console.error(err); }
+            }
+        }
+
+        statusText.innerText = "Complete! Click pins to view Total Insured Values.";
+        if (markers.length > 0) {
+            const group = new L.featureGroup(markers);
+            map.fitBounds(group.getBounds().pad(0.2));
+        }
+    }
+</script>
+
+</body>
+</html>
